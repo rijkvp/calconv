@@ -49,12 +49,28 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
     let mut location = conv_properties.get("LOCATION").unwrap().clone();
     location = location.trim().to_string();
     location = location.replace("\\", "");
+    
     let mut result = HashMap::<String, String>::new();
+    let mut description = String::new();
 
     if summary.contains('-') {
         let parts: Vec<&str> = summary.split('-').collect();
-        let _teachers: Vec<&str> = parts[2].split(',').collect();
-        let groups: Vec<&str> = parts[1].split(',').collect();
+        let groups_str = parts[1].trim();
+        let groups: Vec<&str> = groups_str.split(',').collect();
+        let teachers_str = parts[2].trim();
+        let teachers: Vec<&str> = groups_str.split(',').collect();
+        
+        if teachers.len() == 1 {
+            description += &format!("Docent: {}\n", teachers_str);
+        } else {
+            description += &format!("Docenten: {}\n", teachers_str);
+        }
+        if groups.len() == 1 {
+            description += &format!("Clustergroep: {}", groups_str);
+        } else {
+            description += &format!("Clustergroepen: {}", groups_str);
+        }
+
         let subject = match determine_subject(groups) {
             Some(subject) => subject,
             None => "Onbekend Vak".to_string(),
@@ -70,7 +86,7 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
         }
         location_list.push(loc.to_uppercase());
     }
-    let mut loc_result = String::new();
+    let mut loc_result = String::new();   
     let mut first = true;
     for loc in location_list {
         if !first {
@@ -80,8 +96,10 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
         }
         loc_result += &loc;
     }
+
     result.insert("SUMMARY".to_string(), summary);
     result.insert("LOCATION".to_string(), loc_result);
+    result.insert("DESCRIPTION".to_string(), description);
     return result;
 }
 
