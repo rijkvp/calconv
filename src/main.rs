@@ -61,9 +61,9 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
         let teachers: Vec<&str> = groups_str.split(',').collect();
         
         if teachers.len() == 1 {
-            description += &format!("Docent: {}=0D=0A", teachers_str);
+            description += &format!("Docent: {}; ", teachers_str);
         } else {
-            description += &format!("Docenten: {}=0D=0A", teachers_str);
+            description += &format!("Docenten: {}; ", teachers_str);
         }
         if groups.len() == 1 {
             description += &format!("Clustergroep: {}", groups_str);
