@@ -23,7 +23,7 @@ lazy_static! {
     static ref SUBJECT_NAMES: HashMap<&'static str, &'static str> =
         ron::from_str::<HashMap<&str, &str>>(SUBJECT_NAMES_FILE.as_str()).unwrap();
     static ref SERVER_PORT: String =
-        fs::read_to_string("config/server_port.txt").expect("Failed to read server port file!"); 
+        fs::read_to_string("config/server_port.txt").expect("Failed to read server port file!");
 }
 
 fn determine_subject(groups: Vec<&str>) -> Option<String> {
@@ -43,63 +43,67 @@ fn determine_subject(groups: Vec<&str>) -> Option<String> {
 }
 
 fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashMap<String, String> {
-    let mut summary = conv_properties.get("SUMMARY").unwrap().clone();
-    summary = summary.trim().to_string();
-    summary = summary.replace("\\", "");
-    let mut location = conv_properties.get("LOCATION").unwrap().clone();
-    location = location.trim().to_string();
-    location = location.replace("\\", "");
-    
     let mut result = HashMap::<String, String>::new();
-    let mut description = String::new();
 
-    if summary.contains('-') {
-        let parts: Vec<&str> = summary.split('-').collect();
-        let groups_str = parts[1].trim();
-        let groups: Vec<&str> = groups_str.split(',').collect();
-        let teachers_str = parts[2].trim();
-        let teachers: Vec<&str> = groups_str.split(',').collect();
-        
-        if teachers.len() == 1 {
-            description += &format!("Docent: {}; ", teachers_str);
-        } else {
-            description += &format!("Docenten: {}; ", teachers_str);
-        }
-        if groups.len() == 1 {
-            description += &format!("Clustergroep: {}", groups_str);
-        } else {
-            description += &format!("Clustergroepen: {}", groups_str);
-        }
+    if let Some(summary) = conv_properties.get("SUMMARY") {
+        let summary_input = summary.trim().replace("\\", "");
+        let mut description = String::new();
+        let summary_result: String = {
+            if summary_input.contains('-') {
+                let parts: Vec<&str> = summary_input.split('-').collect();
+                let groups_str = parts[1].trim();
+                let groups: Vec<&str> = groups_str.split(',').collect();
+                let teachers_str = parts[2].trim();
+                let teachers: Vec<&str> = groups_str.split(',').collect();
 
-        let subject = match determine_subject(groups) {
-            Some(subject) => subject,
-            None => "Onbekend Vak".to_string(),
+                if teachers.len() == 1 {
+                    description += &format!("Docent: {}; ", teachers_str);
+                } else {
+                    description += &format!("Docenten: {}; ", teachers_str);
+                }
+                if groups.len() == 1 {
+                    description += &format!("Clustergroep: {}", groups_str);
+                } else {
+                    description += &format!("Clustergroepen: {}", groups_str);
+                }
+
+                let subject = match determine_subject(groups) {
+                    Some(subject) => subject,
+                    None => "Onbekend Vak".to_string(),
+                };
+                subject
+            } else {
+                "Geen invoer".to_string()
+            }
         };
-        summary = subject;
-    }
-    let locations: Vec<&str> = location.split(',').collect();
-    let mut location_list = Vec::new();
-    for loc in locations {
-        let mut loc = loc.trim();
-        if loc.len() == 5 {
-            loc = &loc[1..];
-        }
-        location_list.push(loc.to_uppercase());
-    }
-    let mut loc_result = String::new();   
-    let mut first = true;
-    for loc in location_list {
-        if !first {
-            loc_result += ", ";
-        } else {
-            first = false;
-        }
-        loc_result += &loc;
+        result.insert("SUMMARY".to_string(), summary_result);
+        result.insert("DESCRIPTION".to_string(), description);
     }
 
-    result.insert("SUMMARY".to_string(), summary);
-    result.insert("LOCATION".to_string(), loc_result);
-    result.insert("DESCRIPTION".to_string(), description);
+    if let Some(location) = &conv_properties.get("LOCATION") {
+        let loc_input = location.trim().replace("\\", "");
+        let locations: Vec<&str> = loc_input.split(',').collect();
+        let mut location_list = Vec::new();
+        for loc in locations {
+            let mut loc = loc.trim();
+            if loc.len() == 5 {
+                loc = &loc[1..];
+            }
+            location_list.push(loc.to_uppercase());
+        }
+        let mut loc_result = String::new();
+        let mut first = true;
+        for loc in location_list {
+            if !first {
+                loc_result += ", ";
+            } else {
+                first = false;
+            }
+            loc_result += &loc;
+        }
+        result.insert("LOCATION".to_string(), loc_result);
+    }
+
     return result;
 }
 
