@@ -51,29 +51,33 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
         let summary_result: String = {
             if summary_input.contains('-') {
                 let parts: Vec<&str> = summary_input.split('-').collect();
-                let groups_str = parts[1].trim();
-                let groups: Vec<&str> = groups_str.split(',').collect();
-                let teachers_str = parts[2].trim();
-                let teachers: Vec<&str> = groups_str.split(',').collect();
+                if parts.len() == 3 {
+                    let groups_str = parts[1].trim();
+                    let groups: Vec<&str> = groups_str.split(',').collect();
+                    let teachers_str = parts[2].trim();
+                    let teachers: Vec<&str> = groups_str.split(',').collect();
 
-                if teachers.len() == 1 {
-                    description += &format!("Docent: {}; ", teachers_str);
-                } else {
-                    description += &format!("Docenten: {}; ", teachers_str);
-                }
-                if groups.len() == 1 {
-                    description += &format!("Clustergroep: {}", groups_str);
-                } else {
-                    description += &format!("Clustergroepen: {}", groups_str);
-                }
+                    if teachers.len() == 1 {
+                        description += &format!("Docent: {}; ", teachers_str);
+                    } else {
+                        description += &format!("Docenten: {}; ", teachers_str);
+                    }
+                    if groups.len() == 1 {
+                        description += &format!("Clustergroep: {}", groups_str);
+                    } else {
+                        description += &format!("Clustergroepen: {}", groups_str);
+                    }
 
-                let subject = match determine_subject(groups) {
-                    Some(subject) => subject,
-                    None => "Onbekend Vak".to_string(),
-                };
-                subject
+                    let subject = match determine_subject(groups) {
+                        Some(subject) => subject,
+                        None => "Onbekend Vak".to_string(),
+                    };
+                    subject
+                } else {
+                    summary_input.to_string()
+                }
             } else {
-                "Geen invoer".to_string()
+                summary_input.to_string()
             }
         };
         result.insert("SUMMARY".to_string(), summary_result);
