@@ -119,12 +119,12 @@ fn convert_event(event: IcalEvent) -> Event<'static> {
                 property
                     .value
                     .clone()
-                    .expect("Missing property value for required property!"),
+                    .expect("Missing required property value for event!"),
             );
         } else if CONV_EVENT_PROPERTIES.contains(&property.name.as_str()) {
             conv_properties.insert(
                 property.name.clone(),
-                property.value.clone().expect("Missing property value!"),
+                property.value.clone().expect("Missing convertion property value for event!"),
             );
         } else if EVENT_PROPERTIES.contains(&property.name.as_str()) {
             properties.insert(
@@ -132,7 +132,7 @@ fn convert_event(event: IcalEvent) -> Event<'static> {
                 property
                     .value
                     .clone()
-                    .expect("Missing property value for property!"),
+                    .expect("Missing event property value for event!"),
             );
         }
     }
@@ -173,12 +173,12 @@ fn convert_calendar(cal_data: IcalCalendar) -> String {
         if REQUIRED_CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
             req_cal_properties.insert(
                 cal_property.name.clone(),
-                cal_property.value.clone().expect("Missing property value!"),
+                cal_property.value.clone().expect("Missing required property value for calendar!"),
             );
         } else if CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
             cal_properties.insert(
                 cal_property.name.clone(),
-                cal_property.value.clone().expect("Missing property value!"),
+                cal_property.value.clone().expect("Missing property value for calendar!"),
             );
         }
     }
