@@ -114,26 +114,17 @@ fn convert_event(event: IcalEvent) -> Event<'static> {
 
     for property in &event.properties {
         if REQUIRED_EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            req_properties.insert(
-                property.name.clone(),
-                property
-                    .value
-                    .clone()
-                    .expect("Missing required property value for event!"),
-            );
+            if let Some(value) = &property.value {
+                req_properties.insert(property.name.clone(), value.clone());
+            }
         } else if CONV_EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            conv_properties.insert(
-                property.name.clone(),
-                property.value.clone().expect("Missing convertion property value for event!"),
-            );
+            if let Some(value) = &property.value {
+                conv_properties.insert(property.name.clone(), value.clone());
+            }
         } else if EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            properties.insert(
-                property.name.clone(),
-                property
-                    .value
-                    .clone()
-                    .expect("Missing event property value for event!"),
-            );
+            if let Some(value) = &property.value {
+                properties.insert(property.name.clone(), value.clone());
+            }
         }
     }
 
@@ -173,12 +164,18 @@ fn convert_calendar(cal_data: IcalCalendar) -> String {
         if REQUIRED_CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
             req_cal_properties.insert(
                 cal_property.name.clone(),
-                cal_property.value.clone().expect("Missing required property value for calendar!"),
+                cal_property
+                    .value
+                    .clone()
+                    .expect("Missing required property value for calendar!"),
             );
         } else if CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
             cal_properties.insert(
                 cal_property.name.clone(),
-                cal_property.value.clone().expect("Missing property value for calendar!"),
+                cal_property
+                    .value
+                    .clone()
+                    .expect("Missing property value for calendar!"),
             );
         }
     }
