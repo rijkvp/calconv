@@ -8,8 +8,14 @@ ical = "0.7.0"
 ics = "0.5"
 uuid = { version = "0.8", features = ["v5"] }
 serde = "1.0"
-ron = "0.6.5"
+serde_yaml = "0.8"
 lazy_static = "1.4.0"
 actix-web = "4.0.0-beta.9"
 reqwest = "0.11.4"
-tokio = "0.2.25"
+tokio = "1"
+ 
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = 'abort'

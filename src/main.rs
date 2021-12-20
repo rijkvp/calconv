@@ -1,14 +1,14 @@
-#[macro_use]
-extern crate lazy_static;
-
-use std::{collections::HashMap, fs};
-
 use actix_web::{get, web, App, HttpResponse, HttpServer};
 use ical::parser::ical::component::{IcalCalendar, IcalEvent};
 use ics::components::Property;
 use ics::{Event, ICalendar};
+use lazy_static::lazy_static;
 use serde::Deserialize;
+use std::env;
+use std::{collections::HashMap, fs};
 use uuid::Uuid;
+
+const DEFAULT_CONF: &str = "calconv_conf.yaml";
 
 const REQUIRED_EVENT_PROPERTIES: [&str; 2] = ["UID", "DTSTAMP"];
 const EVENT_PROPERTIES: [&str; 3] = ["DTSTART", "DTEND", "TZID"];
@@ -17,13 +17,25 @@ const CONV_EVENT_PROPERTIES: [&str; 3] = ["SUMMARY", "LOCATION", "DESCRIPTION"];
 const REQUIRED_CALENDAR_PROPERTIES: [&str; 2] = ["VERSION", "PRODID"];
 const CALENDAR_PROPERTIES: [&str; 2] = ["NAME", "DESCRIPTION"];
 
+#[derive(Deserialize)]
+struct Config {
+    address: String,
+    subject_names: HashMap<String, String>,
+}
+
 lazy_static! {
-    static ref SUBJECT_NAMES_FILE: String =
-        fs::read_to_string("config/subject_names.ron").expect("Failed to read subject names file!");
-    static ref SUBJECT_NAMES: HashMap<&'static str, &'static str> =
-        ron::from_str::<HashMap<&str, &str>>(SUBJECT_NAMES_FILE.as_str()).unwrap();
-    static ref SERVER_PORT: String =
-        fs::read_to_string("config/server_port.txt").expect("Failed to read server port file!");
+    static ref ARGS: Vec<String> = env::args().collect();
+    static ref CONF_PATH: &'static str = {
+        if let Some(path) = ARGS.get(1) {
+            path
+        } else {
+            DEFAULT_CONF
+        }
+    };
+    static ref CONF_FILE: String =
+        fs::read_to_string(CONF_PATH.to_string()).expect("Failed to read config file!");
+    static ref CONF: Config =
+        serde_yaml::from_str(&CONF_FILE).expect("Failed to deserialize config!");
 }
 
 fn determine_subject(groups: Vec<&str>) -> Option<String> {
@@ -32,7 +44,7 @@ fn determine_subject(groups: Vec<&str>) -> Option<String> {
         while group_name.chars().last().unwrap().is_digit(10) {
             group_name = &group_name[..group_name.len() - 1];
         }
-        for (key, value) in SUBJECT_NAMES.iter() {
+        for (key, value) in CONF.subject_names.iter() {
             if group_name.contains(key) {
                 return Some(value.to_string());
             }
@@ -250,7 +262,7 @@ async fn parse(info: web::Query<ConvRequest>) -> HttpResponse {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| App::new().service(parse))
-        .bind(SERVER_PORT.clone())?
+        .bind(CONF.address.clone())?
         .run()
         .await
 }
