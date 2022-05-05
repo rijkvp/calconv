@@ -3,8 +3,8 @@ use actix_web::error::PayloadError;
 use actix_web::web::{Data, Query};
 use actix_web::{error, rt};
 use actix_web::{get, http::StatusCode, App, HttpResponse, HttpServer, ResponseError};
-use awc::Client;
 use awc::error::SendRequestError;
+use awc::Client;
 use clap::Parser;
 use ical::parser::ical::component::IcalCalendar;
 use ical::property::Property as SourceProperty;
@@ -186,13 +186,13 @@ fn convert_somtoday(
         let mut event_properties = extract_properties(event.properties)?;
 
         // Create event with timestamp & uid
-        let dt_stamp =
-            properties
-                .get("DTSTAMP")
-                .ok_or(ConversionError::MissingRequiredProperty(
-                    "DTSTAMP".to_string(),
-                ))?;
-        let original_uuid = properties
+        let dt_stamp = event_properties
+            .get("DTSTAMP")
+            .ok_or(ConversionError::MissingRequiredProperty(
+                "DTSTAMP".to_string(),
+            ))?
+            .clone();
+        let original_uuid = event_properties
             .get("UID")
             .ok_or(ConversionError::MissingRequiredProperty("UID".to_string()))?;
         let uuid = Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, original_uuid.as_bytes())
@@ -219,7 +219,7 @@ fn convert_somtoday_properties(
 ) -> Result<(), ConversionError> {
     if let Some(summary) = properties.get("SUMMARY") {
         let summary_input = summary.trim().replace("\\", "");
-        let mut description = String::new();
+        let mut desc_parts = Vec::<String>::new();
         let summary_result: String = {
             if summary_input.contains('-') {
                 let parts: Vec<&str> = summary_input.split('-').collect();
@@ -230,14 +230,14 @@ fn convert_somtoday_properties(
                     let teachers: Vec<&str> = groups_str.split(',').collect();
 
                     if teachers.len() == 1 {
-                        description += &format!("Docent: {}; ", teachers_str);
+                        desc_parts.push(format!("Docent: {}; ", teachers_str));
                     } else {
-                        description += &format!("Docenten: {}; ", teachers_str);
+                        desc_parts.push(format!("Docenten: {}; ", teachers_str));
                     }
                     if groups.len() == 1 {
-                        description += &format!("Clustergroep: {}", groups_str);
+                        desc_parts.push(format!("Clustergroep: {}", groups_str));
                     } else {
-                        description += &format!("Clustergroepen: {}", groups_str);
+                        desc_parts.push(format!("Clustergroepen: {}", groups_str));
                     }
 
                     let subject = match get_subject(groups, subject_names) {
@@ -254,7 +254,13 @@ fn convert_somtoday_properties(
         };
         // Update/create properties
         properties.insert("SUMMARY".to_string(), summary_result);
-        properties.insert("DESCRIPTION".to_string(), description);
+        if desc_parts.len() > 0 {
+            let mut desc = String::new();
+            for part in desc_parts {
+                desc.push_str(&part);
+            }
+            properties.insert("DESCRIPTION".to_string(), desc);
+        }
     }
 
     if let Some(location) = &properties.get("LOCATION") {
