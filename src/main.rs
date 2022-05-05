@@ -1,63 +1,223 @@
-use actix_web::{get, web, App, HttpResponse, HttpServer};
-use ical::parser::ical::component::{IcalCalendar, IcalEvent};
-use ics::components::Property;
+use actix_web::body::BoxBody;
+use actix_web::error::PayloadError;
+use actix_web::web::{Data, Query};
+use actix_web::{error, rt};
+use actix_web::{get, http::StatusCode, App, HttpResponse, HttpServer, ResponseError};
+use awc::Client;
+use awc::error::SendRequestError;
+use clap::Parser;
+use ical::parser::ical::component::IcalCalendar;
+use ical::property::Property as SourceProperty;
+use ics::components::Property as DestProperty;
 use ics::{Event, ICalendar};
-use lazy_static::lazy_static;
+use log::{error, LevelFilter};
 use serde::Deserialize;
-use std::env;
-use std::{collections::HashMap, fs};
+use std::collections::BTreeMap;
+use thiserror::Error;
 use uuid::Uuid;
 
-const DEFAULT_CONF: &str = "calconv_conf.yaml";
-
-const REQUIRED_EVENT_PROPERTIES: [&str; 2] = ["UID", "DTSTAMP"];
-const EVENT_PROPERTIES: [&str; 3] = ["DTSTART", "DTEND", "TZID"];
-const CONV_EVENT_PROPERTIES: [&str; 3] = ["SUMMARY", "LOCATION", "DESCRIPTION"];
-
-const REQUIRED_CALENDAR_PROPERTIES: [&str; 2] = ["VERSION", "PRODID"];
-const CALENDAR_PROPERTIES: [&str; 2] = ["NAME", "DESCRIPTION"];
-
-#[derive(Deserialize)]
-struct Config {
+#[derive(Parser, Debug, Clone)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(short)]
     address: String,
-    subject_names: HashMap<String, String>,
+
+    #[clap(short)]
+    subjects: String,
 }
 
-lazy_static! {
-    static ref ARGS: Vec<String> = env::args().collect();
-    static ref CONF_PATH: &'static str = {
-        if let Some(path) = ARGS.get(1) {
-            path
-        } else {
-            DEFAULT_CONF
-        }
-    };
-    static ref CONF_FILE: String =
-        fs::read_to_string(CONF_PATH.to_string()).expect("Failed to read config file!");
-    static ref CONF: Config =
-        serde_yaml::from_str(&CONF_FILE).expect("Failed to deserialize config!");
+#[derive(Debug, Clone)]
+struct ConvData {
+    subject_names: BTreeMap<String, String>,
 }
 
-fn determine_subject(groups: Vec<&str>) -> Option<String> {
-    for group in &groups {
-        let mut group_name = group.trim();
-        while group_name.chars().last().unwrap().is_digit(10) {
-            group_name = &group_name[..group_name.len() - 1];
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    env_logger::builder()
+        .format_module_path(false)
+        .format_target(false)
+        .filter_level(LevelFilter::Info)
+        .init();
+    let args = Args::parse();
+    let subject_names = deserialize_map_arg(args.subjects.clone());
+    let address = args.address.clone();
+
+    HttpServer::new(move || {
+        App::new().service(convert).app_data(Data::new(ConvData {
+            subject_names: subject_names.clone(),
+        }))
+    })
+    .bind(address)?
+    .run()
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct ConvRequest {
+    c: String,
+    url: String,
+}
+
+#[derive(Debug, Error)]
+enum WebError {
+    #[error("converter '{0}' not found")]
+    ConverterNotFound(String),
+    #[error("failed to fetch calendar: {0}")]
+    Request(#[from] SendRequestError),
+    #[error("failed to fetch calendar: {0}")]
+    Payload(#[from] PayloadError),
+    #[error("no calendar found")]
+    CalendarNotFound,
+    #[error("ICAL parsing error: {0}")]
+    ICALParseError(#[from] ical::parser::ParserError),
+    #[error("conversion error: {0}")]
+    Conversion(#[from] ConversionError),
+    #[error("blocking error: {0}")]
+    BlockingError(#[from] error::BlockingError),
+}
+
+impl ResponseError for WebError {
+    fn status_code(&self) -> StatusCode {
+        match *self {
+            WebError::ConverterNotFound(_) => StatusCode::NOT_FOUND,
+            WebError::Request(_) => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
-        for (key, value) in CONF.subject_names.iter() {
-            if group_name.contains(key) {
-                return Some(value.to_string());
-            }
-        }
-        return Some(group_name.to_string());
     }
-    None
+
+    fn error_response(&self) -> HttpResponse<BoxBody> {
+        let status_code = self.status_code();
+        if !status_code.is_server_error() {
+            HttpResponse::build(status_code).body(self.to_string())
+        } else {
+            error!("server error: {}", self.to_string());
+            HttpResponse::build(status_code).finish()
+        }
+    }
 }
 
-fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashMap<String, String> {
-    let mut result = HashMap::<String, String>::new();
+#[get("/conv")]
+async fn convert(
+    query: Query<ConvRequest>,
+    data: Data<ConvData>,
+) -> Result<HttpResponse, WebError> {
+    if query.c == "somtoday" {
+        let handle = rt::spawn(async move {
+            let calendar = fetch_calendar(&query.url).await?;
+            let converted = convert_somtoday(calendar, &data.subject_names)?;
+            return Ok::<String, WebError>(converted);
+        });
+        let result = handle.await.unwrap()?;
+        Ok(HttpResponse::Ok().body(result))
+    } else {
+        Err(WebError::ConverterNotFound(query.c.to_string()))
+    }
+}
 
-    if let Some(summary) = conv_properties.get("SUMMARY") {
+// Deserializes a map defined like this "keya:valuea;keyb;valueb"
+fn deserialize_map_arg(input: String) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::<String, String>::new();
+    for entry in input.split(';') {
+        let sep = entry.find(':').expect("Missing ':' seperator!");
+        result.insert(entry[0..sep].to_string(), entry[sep..].to_string());
+    }
+    result
+}
+
+async fn fetch_calendar(calendar_url: &str) -> Result<IcalCalendar, WebError> {
+    let calendar_str = get_request(calendar_url).await?;
+    let mut reader = ical::IcalParser::new(calendar_str.as_bytes());
+    // Parse first calendar
+    let calendar = reader.next().ok_or(WebError::CalendarNotFound)??;
+    Ok(calendar)
+}
+
+async fn get_request(url: &str) -> Result<String, WebError> {
+    let client = Client::default();
+    let mut response = client
+        .get(url)
+        .insert_header(("User-Agent", "calconv"))
+        .send()
+        .await?;
+    let body = response.body().await?;
+    let text = String::from_utf8_lossy(&body).to_string();
+    Ok(text)
+}
+
+#[derive(Debug, Error)]
+enum ConversionError {
+    #[error("missing required property: {0}")]
+    MissingRequiredProperty(String),
+    #[error("missing value of property: {0}")]
+    MissingPropertyValue(String),
+}
+
+fn extract_properties(
+    source: Vec<SourceProperty>,
+) -> Result<BTreeMap<String, String>, ConversionError> {
+    let mut result = BTreeMap::<String, String>::new();
+    for proptery in source.iter() {
+        result.insert(
+            proptery.name.clone(),
+            proptery
+                .value
+                .clone()
+                .ok_or(ConversionError::MissingPropertyValue(proptery.name.clone()))?,
+        );
+    }
+    Ok(result)
+}
+
+fn convert_somtoday(
+    source: IcalCalendar,
+    subject_names: &BTreeMap<String, String>,
+) -> Result<String, ConversionError> {
+    // Convert properties to string map
+    let properties = extract_properties(source.properties)?;
+
+    // Create calendar and add properties
+    let mut calendar = ICalendar::new("2.0", "-//rijkvp //calconv //NL");
+    for (key, value) in properties.iter() {
+        calendar.push(DestProperty::new(key, value));
+    }
+
+    // Convert events
+    for event in source.events {
+        let mut event_properties = extract_properties(event.properties)?;
+
+        // Create event with timestamp & uid
+        let dt_stamp =
+            properties
+                .get("DTSTAMP")
+                .ok_or(ConversionError::MissingRequiredProperty(
+                    "DTSTAMP".to_string(),
+                ))?;
+        let original_uuid = properties
+            .get("UID")
+            .ok_or(ConversionError::MissingRequiredProperty("UID".to_string()))?;
+        let uuid = Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, original_uuid.as_bytes())
+            .as_hyphenated()
+            .to_string();
+        let mut event = Event::new(uuid, dt_stamp);
+
+        // Peform actual changes on the properties
+        convert_somtoday_properties(&mut event_properties, subject_names)?;
+
+        // Add properties
+        for (key, value) in event_properties {
+            event.push(DestProperty::new(key, value));
+        }
+        calendar.add_event(event);
+    }
+
+    Ok(calendar.to_string())
+}
+
+fn convert_somtoday_properties(
+    properties: &mut BTreeMap<String, String>,
+    subject_names: &BTreeMap<String, String>,
+) -> Result<(), ConversionError> {
+    if let Some(summary) = properties.get("SUMMARY") {
         let summary_input = summary.trim().replace("\\", "");
         let mut description = String::new();
         let summary_result: String = {
@@ -80,9 +240,9 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
                         description += &format!("Clustergroepen: {}", groups_str);
                     }
 
-                    let subject = match determine_subject(groups) {
+                    let subject = match get_subject(groups, subject_names) {
                         Some(subject) => subject,
-                        None => "Onbekend Vak".to_string(),
+                        None => "Onbekend vak".to_string(),
                     };
                     subject
                 } else {
@@ -92,11 +252,12 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
                 summary_input.to_string()
             }
         };
-        result.insert("SUMMARY".to_string(), summary_result);
-        result.insert("DESCRIPTION".to_string(), description);
+        // Update/create properties
+        properties.insert("SUMMARY".to_string(), summary_result);
+        properties.insert("DESCRIPTION".to_string(), description);
     }
 
-    if let Some(location) = &conv_properties.get("LOCATION") {
+    if let Some(location) = &properties.get("LOCATION") {
         let loc_input = location.trim().replace("\\", "");
         let locations: Vec<&str> = loc_input.split(',').collect();
         let mut location_list = Vec::new();
@@ -117,152 +278,23 @@ fn convert_properties<'a>(conv_properties: &'a HashMap<String, String>) -> HashM
             }
             loc_result += &loc;
         }
-        result.insert("LOCATION".to_string(), loc_result);
+        properties.insert("LOCATION".to_string(), loc_result);
     }
-
-    return result;
+    Ok(())
 }
 
-fn convert_event(event: IcalEvent) -> Event<'static> {
-    let mut req_properties = HashMap::<String, String>::new();
-    let mut conv_properties = HashMap::<String, String>::new();
-    let mut properties = HashMap::<String, String>::new();
-
-    for property in &event.properties {
-        if REQUIRED_EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            if let Some(value) = &property.value {
-                req_properties.insert(property.name.clone(), value.clone());
-            }
-        } else if CONV_EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            if let Some(value) = &property.value {
-                conv_properties.insert(property.name.clone(), value.clone());
-            }
-        } else if EVENT_PROPERTIES.contains(&property.name.as_str()) {
-            if let Some(value) = &property.value {
-                properties.insert(property.name.clone(), value.clone());
+fn get_subject(groups: Vec<&str>, subject_names: &BTreeMap<String, String>) -> Option<String> {
+    for group in &groups {
+        let mut group_name = group.trim();
+        while group_name.chars().last().unwrap().is_numeric() {
+            group_name = &group_name[..group_name.len() - 1];
+        }
+        for (key, value) in subject_names.iter() {
+            if group_name.contains(key) {
+                return Some(value.to_string());
             }
         }
+        return Some(group_name.to_string());
     }
-
-    let dt_stamp = req_properties
-        .get("DTSTAMP")
-        .expect("Missing DTSTAMP property in event!")
-        .clone();
-    let original_uuid = req_properties
-        .get("UID")
-        .expect("Missing UID property in event!")
-        .clone();
-    let uuid = Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, original_uuid.as_bytes())
-        .as_hyphenated()
-        .to_string();
-
-    let mut event = Event::new(uuid, dt_stamp);
-
-    for property in properties {
-        let (key, value) = property;
-        event.push(Property::new(key, value));
-    }
-
-    conv_properties = convert_properties(&conv_properties);
-    for property in &conv_properties {
-        let (key, value) = property;
-        event.push(Property::new(key.to_string(), value.to_string()));
-    }
-
-    return event;
-}
-
-fn convert_calendar(cal_data: IcalCalendar) -> String {
-    let mut req_cal_properties = HashMap::<String, String>::new();
-    let mut cal_properties = HashMap::<String, String>::new();
-
-    for cal_property in &cal_data.properties {
-        if REQUIRED_CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
-            req_cal_properties.insert(
-                cal_property.name.clone(),
-                cal_property
-                    .value
-                    .clone()
-                    .expect("Missing required property value for calendar!"),
-            );
-        } else if CALENDAR_PROPERTIES.contains(&cal_property.name.as_str()) {
-            cal_properties.insert(
-                cal_property.name.clone(),
-                cal_property
-                    .value
-                    .clone()
-                    .expect("Missing property value for calendar!"),
-            );
-        }
-    }
-
-    let ver = match req_cal_properties.get("VERSION") {
-        Some(str) => str,
-        None => "2.0",
-    };
-    let prodid = match req_cal_properties.get("PRODID") {
-        Some(str) => str,
-        None => "-//calconv",
-    };
-    let mut calendar = ICalendar::new(ver, prodid);
-
-    for event in cal_data.events {
-        let parsed_event = convert_event(event);
-        calendar.add_event(parsed_event);
-    }
-
-    for property in &cal_properties {
-        let (key, value) = property;
-        calendar.push(Property::new(key, value));
-    }
-
-    calendar.to_string()
-}
-
-#[derive(Debug, Deserialize)]
-struct ConvRequest {
-    c: String,
-    url: String,
-}
-
-async fn get_request(url: &str) -> Result<String, reqwest::Error> {
-    let response = reqwest::get(url).await?;
-    let text = response.text().await?;
-    Ok(text)
-}
-
-async fn conv_somtoday(url: &str) -> Result<String, String> {
-    return match get_request(url).await {
-        Ok(cal_data) => {
-            let reader = ical::IcalParser::new(cal_data.as_bytes());
-            for line in reader {
-                if let Ok(calendar) = line {
-                    let convered_calendar = convert_calendar(calendar.clone());
-                    return Ok(convered_calendar);
-                }
-            }
-            Err("Failed to parse calendar!".to_string())
-        }
-        Err(err) => Err(format!("Error while receiving calendar!/n{}", err)),
-    };
-}
-
-#[get("/conv")]
-async fn parse(info: web::Query<ConvRequest>) -> HttpResponse {
-    if info.c == "somtoday" {
-        return match conv_somtoday(&info.url).await {
-            Ok(str) => HttpResponse::Ok().body(str),
-            Err(err) => HttpResponse::InternalServerError().body(err),
-        };
-    } else {
-        return HttpResponse::BadRequest().body("Unknown converter!");
-    }
-}
-
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().service(parse))
-        .bind(CONF.address.clone())?
-        .run()
-        .await
+    None
 }
