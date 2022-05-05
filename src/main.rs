@@ -153,7 +153,7 @@ fn convert_event(event: IcalEvent) -> Event<'static> {
         .expect("Missing UID property in event!")
         .clone();
     let uuid = Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, original_uuid.as_bytes())
-        .to_hyphenated()
+        .as_hyphenated()
         .to_string();
 
     let mut event = Event::new(uuid, dt_stamp);
