@@ -6,11 +6,15 @@ edition = "2021"
 description = "ICAL calendar conversion."
 
 [dependencies]
-actix-web = { version="4.0", features=["openssl"] }
-serde = { version = "1.0", features = ["derive"] }
-awc = "3.0"
+actix-web = { version = "4.0", features = ["openssl"] }
+awc = { version = "3.0", features = ["openssl"] }
 openssl = { version = "0.10", features = ["vendored"] }
-clap = { version = "3.1", default-features = false, features = ["std", "derive", "suggestions"] }
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "3.1", default-features = false, features = [
+    "std",
+    "derive",
+    "suggestions",
+] }
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.9"
