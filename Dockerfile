@@ -1,9 +1,9 @@
-FROM rust:slim as build-env
-RUN apt-get update && apt-get install -y build-essential
+FROM rust:alpine as build-env
+RUN apk update && apk --no-cache --update add build-base openssl openssl-dev perl
 WORKDIR /app
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-gnu
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
-FROM gcr.io/distroless/cc
-COPY --from=build-env /app/target/x86_64-unknown-linux-gnu/release/calconv /bin/calconv
+FROM gcr.io/distroless/static
+COPY --from=build-env /app/target/x86_64-unknown-linux-musl/release/calconv /bin/calconv
 ENTRYPOINT [ "/bin/calconv" ]
